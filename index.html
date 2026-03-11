@@ -2692,43 +2692,119 @@ function renderNewsItem(item){
   return d;
 }
 
-async function parseFeed(feedDef){
-  // rss2json.com — free public API, handles CORS, no key required for public feeds
-  const api = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedDef.url)}&api_key=&count=15`;
+/* ═══════════════════════════════════════════════════════════════
+   RSS FETCHING — Multi-proxy with cache + progressive rendering
+   Proxies tried in order: rss2json → allorigins → corsproxy.io
+   LocalStorage cache: 5min TTL, survives page reloads
+═══════════════════════════════════════════════════════════════ */
+const RSS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function _rssMapItem(it, feedDef, source='json') {
+  const pub  = source === 'json' ? it.pubDate : it.querySelector('pubDate')?.textContent;
+  const title = source === 'json'
+    ? (it.title||'').trim()
+    : it.querySelector('title')?.textContent?.trim() || '—';
+  const link = source === 'json'
+    ? (it.link||it.guid||'')
+    : (it.querySelector('link')?.textContent?.trim() || '');
+  const desc = source === 'json'
+    ? (it.description||it.content||'')
+    : (it.querySelector('description')?.textContent||'');
+  return {
+    src:   feedDef.name,
+    cat:   feedDef.cat || 'OTHER',
+    title,
+    link,
+    snip:  desc.replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/\s+/g,' ').trim().slice(0,200),
+    time:  timeAgo(pub),
+    ts:    new Date(pub||0).getTime(),
+  };
+}
+
+async function _tryRss2json(feedDef) {
+  const api = `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(feedDef.url)}&count=12`;
+  const r = await fetch(api, {signal: AbortSignal.timeout(6000)});
+  if(!r.ok) throw new Error('rss2json HTTP '+r.status);
+  const j = await r.json();
+  if(j.status !== 'ok' || !j.items?.length) throw new Error('rss2json no items');
+  return j.items.map(it => _rssMapItem(it, feedDef, 'json'));
+}
+
+async function _tryAllOrigins(feedDef) {
+  const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(feedDef.url)}`;
+  const r = await fetch(proxy, {signal: AbortSignal.timeout(7000)});
+  if(!r.ok) throw new Error('allorigins HTTP '+r.status);
+  const text = await r.text();
+  const xml = new DOMParser().parseFromString(text, 'application/xml');
+  const items = [...xml.querySelectorAll('item')].slice(0,12);
+  if(!items.length) throw new Error('allorigins no items');
+  return items.map(it => _rssMapItem(it, feedDef, 'xml'));
+}
+
+async function _tryCorsProxy(feedDef) {
+  const proxy = `https://corsproxy.io/?${encodeURIComponent(feedDef.url)}`;
+  const r = await fetch(proxy, {signal: AbortSignal.timeout(7000)});
+  if(!r.ok) throw new Error('corsproxy HTTP '+r.status);
+  const text = await r.text();
+  const xml = new DOMParser().parseFromString(text, 'application/xml');
+  const items = [...xml.querySelectorAll('item')].slice(0,12);
+  if(!items.length) throw new Error('corsproxy no items');
+  return items.map(it => _rssMapItem(it, feedDef, 'xml'));
+}
+
+async function parseFeed(feedDef) {
+  // 1. Check localStorage cache first
+  const cacheKey = 'rss_' + feedDef.name;
   try {
-    const r = await fetch(api, {signal: AbortSignal.timeout(10000)});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    const j = await r.json();
-    if(j.status !== 'ok' || !j.items) return [];
-    return j.items.map(it => ({
-      src:   feedDef.name,
-      cat:   feedDef.cat || 'OTHER',
-      title: (it.title||'').trim(),
-      link:  it.link||it.guid||'',
-      snip:  (it.description||it.content||'').replace(/<[^>]*>/g,'').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim(),
-      time:  timeAgo(it.pubDate),
-      ts:    new Date(it.pubDate||0).getTime(),
-    }));
-  } catch(e){
-    // Fallback: try allorigins XML parse
-    try {
-      const proxy = `https://api.allorigins.win/raw?url=${encodeURIComponent(feedDef.url)}`;
-      const r2 = await fetch(proxy, {signal: AbortSignal.timeout(8000)});
-      const text = await r2.text();
-      const parser = new DOMParser();
-      const xml = parser.parseFromString(text, 'application/xml');
-      const items = [...xml.querySelectorAll('item')].slice(0,10);
-      return items.map(it => ({
-        src:   feedDef.name,
-        cat:   feedDef.cat || 'OTHER',
-        title: it.querySelector('title')?.textContent?.trim() || '—',
-        link:  it.querySelector('link')?.textContent?.trim() || '',
-        snip:  (it.querySelector('description')?.textContent||'').replace(/<[^>]*>/g,'').trim(),
-        time:  timeAgo(it.querySelector('pubDate')?.textContent),
-        ts:    new Date(it.querySelector('pubDate')?.textContent||0).getTime(),
-      }));
-    } catch(e2){ return []; }
+    const cached = localStorage.getItem(cacheKey);
+    if(cached) {
+      const {ts, items} = JSON.parse(cached);
+      if(Date.now() - ts < RSS_CACHE_TTL && items?.length) {
+        // Return cached immediately, but schedule background refresh
+        _scheduleBgRefresh(feedDef, cacheKey);
+        return items;
+      }
+    }
+  } catch(e) {}
+
+  // 2. Try proxies in sequence
+  return await _fetchWithFallback(feedDef, cacheKey);
+}
+
+// Track ongoing bg refreshes to avoid duplicate fetches
+const _bgRefreshPending = new Set();
+
+function _scheduleBgRefresh(feedDef, cacheKey) {
+  if(_bgRefreshPending.has(feedDef.name)) return;
+  const cached = localStorage.getItem(cacheKey);
+  if(cached) {
+    const {ts} = JSON.parse(cached);
+    const age = Date.now() - ts;
+    if(age < RSS_CACHE_TTL * 0.5) return; // still fresh enough, skip
   }
+  _bgRefreshPending.add(feedDef.name);
+  setTimeout(async () => {
+    try {
+      await _fetchWithFallback(feedDef, cacheKey);
+    } finally {
+      _bgRefreshPending.delete(feedDef.name);
+    }
+  }, 100);
+}
+
+async function _fetchWithFallback(feedDef, cacheKey) {
+  const proxies = [_tryRss2json, _tryAllOrigins, _tryCorsProxy];
+  for(const proxy of proxies) {
+    try {
+      const items = await proxy(feedDef);
+      if(items?.length) {
+        // Cache in localStorage
+        try { localStorage.setItem(cacheKey, JSON.stringify({ts: Date.now(), items})); } catch(e){}
+        return items;
+      }
+    } catch(e) { /* try next proxy */ }
+  }
+  return [];
 }
 
 let newsLoaded = false;
@@ -2764,32 +2840,109 @@ async function fetchSharePointAIReports(){
 
 async function loadLiveNews(forceRefresh=false){
   const nl = document.getElementById('news-list');
-  if(!newsLoaded || forceRefresh){
-    nl.innerHTML = `
-      <div style="text-align:center;padding:40px;color:var(--dim)">
-        <div style="width:24px;height:24px;border:2px solid rgba(240,165,0,.3);border-top-color:var(--accent);
-             border-radius:50%;animation:spin 0.9s linear infinite;margin:0 auto 12px"></div>
-        <div style="font-size:11px;letter-spacing:.15em">SYNCHRONIZING FEEDS…</div>
-      </div>`;
+
+  // If forceRefresh, clear localStorage caches
+  if(forceRefresh) {
+    RSS_FEEDS.forEach(f => { try { localStorage.removeItem('rss_' + f.name); } catch(e){} });
   }
 
-  // Fetch RSS + SharePoint AI in parallel
-  const [rssResults, aiReports] = await Promise.all([
-    Promise.allSettled(RSS_FEEDS.map(f => parseFeed(f))),
+  // Show cached content immediately if available
+  const cachedItems = _getallCachedRssItems();
+  if(cachedItems.length > 0 && !forceRefresh) {
+    // Render from cache instantly
+    _renderNewsContent(nl, cachedItems, []);
+    newsLoaded = true;
+    cacheRssItemsForCountry(cachedItems);
+    // Then refresh in background
+    _bgRefreshAllFeeds(nl);
+    return;
+  }
+
+  // No cache — show spinner and fetch
+  nl.innerHTML = `
+    <div style="text-align:center;padding:40px;color:var(--dim)">
+      <div style="width:24px;height:24px;border:2px solid rgba(240,165,0,.3);border-top-color:var(--accent);
+           border-radius:50%;animation:spin 0.9s linear infinite;margin:0 auto 12px"></div>
+      <div style="font-size:11px;letter-spacing:.15em">SYNCHRONIZING FEEDS…</div>
+      <div style="font-size:9px;color:var(--dim);margin-top:8px;opacity:.6">Fetching ${RSS_FEEDS.length} sources…</div>
+    </div>`;
+
+  // Priority feeds first (render partial ASAP), then rest
+  const PRIORITY = ['OilPrice','Reuters','Rigzone','EIA','OPEC'];
+  const priorityFeeds = RSS_FEEDS.filter(f => PRIORITY.includes(f.name));
+  const otherFeeds    = RSS_FEEDS.filter(f => !PRIORITY.includes(f.name));
+
+  // Fetch priority feeds
+  const priResults = await Promise.allSettled(priorityFeeds.map(f => parseFeed(f)));
+  const priItems = priResults.filter(r=>r.status==='fulfilled').flatMap(r=>r.value).filter(it=>it.title&&it.title!=='—');
+
+  if(priItems.length > 0) {
+    // Render priority items immediately
+    _renderNewsContent(nl, priItems, []);
+    cacheRssItemsForCountry(priItems);
+    newsLoaded = true;
+  }
+
+  // Fetch remaining feeds + SharePoint in parallel (background)
+  const [otherResults, aiReports] = await Promise.all([
+    Promise.allSettled(otherFeeds.map(f => parseFeed(f))),
     fetchSharePointAIReports(),
   ]);
 
-  const allRssItems = rssResults
-    .filter(r => r.status==='fulfilled')
-    .flatMap(r => r.value)
-    .filter(it => it.title && it.title !== '—')
-    .sort((a,b) => b.ts - a.ts);
+  const otherItems = otherResults.filter(r=>r.status==='fulfilled').flatMap(r=>r.value).filter(it=>it.title&&it.title!=='—');
+  const allRssItems = [...priItems, ...otherItems].sort((a,b)=>b.ts-a.ts);
+  cacheRssItemsForCountry(allRssItems);
+  _renderNewsContent(nl, allRssItems, aiReports);
+  newsLoaded = true;
+}
 
-  // Separate IEA Reports from the general wire
+function _getallCachedRssItems() {
+  const items = [];
+  RSS_FEEDS.forEach(f => {
+    try {
+      const cached = localStorage.getItem('rss_' + f.name);
+      if(cached) {
+        const {ts, items: cachedItems} = JSON.parse(cached);
+        if(Date.now() - ts < RSS_CACHE_TTL && cachedItems?.length) {
+          items.push(...cachedItems);
+        }
+      }
+    } catch(e) {}
+  });
+  return items.sort((a,b) => b.ts - a.ts);
+}
+
+async function _bgRefreshAllFeeds(nl) {
+  const PRIORITY = ['OilPrice','Reuters','Rigzone','EIA','OPEC'];
+  const priorityFeeds = RSS_FEEDS.filter(f => PRIORITY.includes(f.name));
+  const otherFeeds    = RSS_FEEDS.filter(f => !PRIORITY.includes(f.name));
+  // Clear cache for these to force refresh
+  RSS_FEEDS.forEach(f => {
+    try {
+      const c = localStorage.getItem('rss_' + f.name);
+      if(c) { const {ts} = JSON.parse(c); if(Date.now()-ts > RSS_CACHE_TTL*0.8) localStorage.removeItem('rss_'+f.name); }
+    } catch(e){}
+  });
+  const [priR, otherR, aiReports] = await Promise.all([
+    Promise.allSettled(priorityFeeds.map(f => parseFeed(f))),
+    Promise.allSettled(otherFeeds.map(f => parseFeed(f))),
+    fetchSharePointAIReports(),
+  ]);
+  const allItems = [...priR,...otherR].filter(r=>r.status==='fulfilled').flatMap(r=>r.value).filter(it=>it.title&&it.title!=='—').sort((a,b)=>b.ts-a.ts);
+  if(allItems.length) {
+    cacheRssItemsForCountry(allItems);
+    _renderNewsContent(nl, allItems, aiReports);
+  }
+}
+
+function _renderNewsContent(nl, allRssItems, aiReports) {
+  // Fetch RSS + SharePoint AI in parallel — LEGACY COMPAT SHIM
+  const rssResults = { fulfilled: true }; // unused below
+  // Separate IEA Reports
   const ieaReportItems = allRssItems.filter(it => it.src === 'IEA Reports').slice(0, 12);
   const rssItems = allRssItems.filter(it => it.src !== 'IEA Reports').slice(0, 40);
-  cacheRssItemsForCountry(allRssItems); // make available for country filtering
 
+  // (items already filtered above — this block is now inside _renderNewsContent)
   nl.innerHTML = '';
 
   // ── Section 0: IEA Official Reports (OMR, WEO, Oil 2025…) ──────
@@ -2943,11 +3096,13 @@ async function loadLiveNews(forceRefresh=false){
     nl.appendChild(d);
   }
 
-  newsLoaded = true;
 }
 
-// Refresh every 5 minutes
-setInterval(()=>loadLiveNews(false), 300000);
+// Refresh every 5 minutes — with cache-busting
+setInterval(async () => {
+  const nl = document.getElementById('news-list');
+  if(nl) await _bgRefreshAllFeeds(nl);
+}, 300000);
 
 /* ════════════════════════════════════════════════════════════════
    NAV / VIEW MANAGEMENT
