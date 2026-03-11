@@ -2,7 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Link</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#0a0f1e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="The Link">
+  <meta name="application-name" content="The Link">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <title>CRUDE · Global Oil Intelligence Terminal</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -605,6 +614,21 @@ body {
   color: var(--accent);
 }
 
+/* ── Storage overlay tabs ── */
+.storage-tab {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  padding: 4px 12px;
+  font-size: 9px;
+  font-family: inherit;
+  letter-spacing: .1em;
+  cursor: pointer;
+  transition: all .15s;
+}
+.storage-tab:hover { border-color: #63b3ed; color: #63b3ed; }
+.storage-tab.active { border-color: #63b3ed; color: #63b3ed; background: rgba(99,179,237,.08); }
+
 /* ── Show bottom tab bar + mob charts only on mobile ── */
 #mob-tab-bar { display: none; }
 #mob-charts-overlay { display: none !important; }
@@ -687,6 +711,7 @@ body {
     <button class="pill live-btn" onclick="showView('news')"><div class="live-dot"></div>LIVE NEWS</button>
     <button class="pill" id="pill-ai" onclick="showView('ai')" style="border-color:rgba(79,195,247,.3);color:var(--dim)">🤖 AI ANALYST</button>
     <button class="pill" id="pill-refinery" onclick="showView('refinery')" style="border-color:rgba(251,146,60,.3);color:var(--dim)">🏭 RAFFINAGE</button>
+    <button class="pill" id="pill-storage" onclick="showView('storage')" style="border-color:rgba(99,179,237,.3);color:var(--dim)">📦 STORAGE</button>
     <div id="medeco-pills-sep" style="width:1px;height:16px;background:var(--border);margin:0 4px;align-self:center;flex-shrink:0"></div>
     <span id="medeco-pills-label" style="font-size:8px;color:var(--dim);letter-spacing:.12em;flex-shrink:0;align-self:center">📡 MEDECO</span>
     <!-- Crude Medeco pills — shown only in crude mode -->
@@ -3110,6 +3135,7 @@ setInterval(async () => {
 function showView(v){
   document.getElementById('chart-overlay').classList.add('overlay-hidden');
   document.getElementById('news-overlay').classList.add('overlay-hidden');
+  const _sOv = document.getElementById('storage-overlay'); if(_sOv) _sOv.classList.add('overlay-hidden');
   const aiOv = document.getElementById('ai-overlay');
   if(aiOv) aiOv.classList.add('overlay-hidden');
   const _refOv = document.getElementById('refinery-overlay');
@@ -3123,6 +3149,8 @@ function showView(v){
     if(aiOv){ aiOv.classList.remove('overlay-hidden'); }
     if(!_aiInitialized) initAIPanel();
   }
+  const _storOv = document.getElementById('storage-overlay');
+  if(_storOv){ if(v==='storage'){ _storOv.classList.remove('overlay-hidden'); switchStorageTab(currentMode||'crude'); return; } else _storOv.classList.add('overlay-hidden'); }
   const refOv = document.getElementById('refinery-overlay');
   if(refOv) refOv.classList.add('overlay-hidden');
   if(v==='refinery'){
@@ -3130,6 +3158,66 @@ function showView(v){
   }
   document.querySelectorAll('.pill').forEach(p=>p.classList.remove('active'));
   if(v==='map') document.querySelector('.pill.active, .pill:first-child').classList.add('active');
+}
+
+
+/* ── Storage overlay ─────────────────────────────────────────── */
+function switchStorageTab(mode) {
+  // Update tab buttons
+  document.querySelectorAll('.storage-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.mode === mode);
+  });
+  // Show correct pane
+  document.querySelectorAll('.storage-pane').forEach(p => p.style.display = 'none');
+  const pane = document.getElementById('storage-pane-' + mode);
+  if(pane) pane.style.display = 'block';
+}
+
+function setStorageUrl(mode, url) {
+  if(!url || !url.startsWith('http')) return;
+  url = url.trim();
+  const pane = document.getElementById('storage-pane-' + mode);
+  if(!pane) return;
+  const labels = {distillat:'DISTILLATES',lng:'LNG',gasoline:'GASOLINE',fuel:'FUEL OIL'};
+  const colors = {distillat:'#4fc3f7',lng:'#22d3ee',gasoline:'#fb923c',fuel:'#94a3b8'};
+  const col = colors[mode] || '#63b3ed';
+  const label = labels[mode] || mode.toUpperCase();
+  pane.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:20px">
+      <div style="font-size:56px;opacity:.15">📊</div>
+      <div style="text-align:center">
+        <div style="font-size:13px;letter-spacing:.2em;color:${col};margin-bottom:6px">${label} STORAGE — POWER BI</div>
+        <div style="font-size:10px;color:var(--dim);margin-bottom:24px;opacity:.7">Click below to open the report in a new tab.</div>
+        <a href="${url}" target="_blank" rel="noopener"
+           style="display:inline-flex;align-items:center;gap:10px;padding:14px 28px;
+                  border:1px solid ${col};background:rgba(99,179,237,.08);
+                  color:${col};font-family:inherit;font-size:11px;letter-spacing:.15em;
+                  text-decoration:none;transition:all .2s"
+           onmouseover="this.style.background='rgba(99,179,237,.18)'"
+           onmouseout="this.style.background='rgba(99,179,237,.08)'">
+          📊 &nbsp;OPEN ${label} STORAGE REPORT ↗
+        </a>
+        <div style="margin-top:16px">
+          <button onclick="document.getElementById('storage-pane-${mode}').innerHTML='';setStorageUrl('${mode}','')"
+            style="background:none;border:none;color:var(--dim);font-size:9px;font-family:inherit;cursor:pointer;opacity:.5;letter-spacing:.08em">
+            ✎ change URL
+          </button>
+        </div>
+      </div>
+      <div style="font-size:9px;color:var(--dim);opacity:.4">Make sure you are logged in to your Microsoft/TGS account</div>
+    </div>`;
+  try { localStorage.setItem('storage_url_' + mode, url); } catch(e){}
+}
+
+function _initStorageUrls() {
+  // Restore saved URLs from localStorage
+  ['distillat','lng','gasoline','fuel'].forEach(mode => {
+    try {
+      const saved = localStorage.getItem('storage_url_' + mode);
+      if(saved) setStorageUrl(mode, saved);
+    } catch(e){}
+  });
+  // Sync storage tab with current product mode when opening
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -4805,6 +4893,9 @@ if(MEDECO_BASE) {
   console.log('%c[MEDECO] Non configuré (MEDECO_BASE = null) — les onglets 📡 afficheront les instructions', 'color:#58677a');
 }
 
+// Init storage saved URLs
+_initStorageUrls();
+
 // Mobile init — sync active tab on load
 if(window.innerWidth <= 768) {
   document.querySelectorAll('.mob-tab').forEach(t => t.classList.remove('active'));
@@ -4952,5 +5043,134 @@ if(window.innerWidth <= 768) {
     </div>
   </div>
 </div>
+
+<!-- ═══ STORAGE OVERLAY ══════════════════════════════════════════ -->
+<div id="storage-overlay" class="overlay overlay-hidden" style="flex-direction:column;overflow:hidden;">
+
+  <!-- Top bar -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:48px;flex-shrink:0;border-bottom:1px solid var(--border);background:var(--panel)">
+    <div style="display:flex;align-items:center;gap:16px">
+      <span style="font-size:10px;font-weight:700;letter-spacing:.2em;color:#63b3ed">📦 STORAGE ANALYTICS</span>
+      <!-- Product tabs -->
+      <div id="storage-tabs" style="display:flex;gap:4px">
+        <button class="storage-tab active" data-mode="crude"      onclick="switchStorageTab('crude')"     >🛢 CRUDE</button>
+        <button class="storage-tab"        data-mode="distillat"  onclick="switchStorageTab('distillat')" >⚗️ DISTILLAT</button>
+        <button class="storage-tab"        data-mode="lng"        onclick="switchStorageTab('lng')"       >🧊 LNG</button>
+        <button class="storage-tab"        data-mode="gasoline"   onclick="switchStorageTab('gasoline')"  >⛽ GASOLINE</button>
+        <button class="storage-tab"        data-mode="fuel"       onclick="switchStorageTab('fuel')"      >🚢 FUEL OIL</button>
+      </div>
+    </div>
+    <button onclick="closeOverlay('storage-overlay')" style="background:none;border:1px solid var(--border);color:var(--dim);padding:4px 14px;font-size:9px;cursor:pointer;font-family:inherit;letter-spacing:.1em;transition:all .15s" onmouseover="this.style.borderColor='#63b3ed';this.style.color='#63b3ed'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--dim)'">✕ CLOSE</button>
+  </div>
+
+  <!-- Content area -->
+  <div id="storage-content" style="flex:1;position:relative;overflow:hidden;">
+
+    <!-- CRUDE — PowerBI link card -->
+    <div id="storage-pane-crude" class="storage-pane" style="position:absolute;inset:0;">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:20px">
+        <div style="font-size:56px;opacity:.15">📊</div>
+        <div style="text-align:center">
+          <div style="font-size:13px;letter-spacing:.2em;color:#63b3ed;margin-bottom:6px">CRUDE STORAGE — POWER BI</div>
+          <div style="font-size:10px;color:var(--dim);margin-bottom:24px;opacity:.7">PowerBI reports cannot be embedded due to Microsoft security policy.<br>Click below to open the report in a new tab.</div>
+          <a href="https://app.powerbi.com/groups/me/reports/79225e7a-59b7-476d-a772-2997966f9123/a71df5dd319378e0642b?ctid=329e91b0-e21f-48fb-a071-456717ecc28e&experience=power-bi"
+             target="_blank" rel="noopener"
+             style="display:inline-flex;align-items:center;gap:10px;padding:14px 28px;
+                    border:1px solid #63b3ed;background:rgba(99,179,237,.08);
+                    color:#63b3ed;font-family:inherit;font-size:11px;letter-spacing:.15em;
+                    text-decoration:none;transition:all .2s"
+             onmouseover="this.style.background='rgba(99,179,237,.18)'"
+             onmouseout="this.style.background='rgba(99,179,237,.08)'">
+            📊 &nbsp;OPEN CRUDE STORAGE REPORT ↗
+          </a>
+        </div>
+        <div style="font-size:9px;color:var(--dim);opacity:.4;margin-top:8px">Make sure you are logged in to your Microsoft/TGS account</div>
+      </div>
+    </div>
+
+    <!-- DISTILLAT — placeholder -->
+    <div id="storage-pane-distillat" class="storage-pane" style="position:absolute;inset:0;display:none;">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:var(--dim)">
+        <div style="font-size:48px;opacity:.2">⚗️</div>
+        <div style="font-size:12px;letter-spacing:.2em;color:#4fc3f7">DISTILLATES STORAGE</div>
+        <div style="font-size:10px;opacity:.5">PowerBI report not yet configured</div>
+        <div style="margin-top:8px">
+          <input id="storage-url-distillat" type="text" placeholder="Paste PowerBI URL here…"
+            style="background:var(--panel);border:1px solid var(--border);color:var(--text);padding:8px 14px;font-family:inherit;font-size:10px;width:420px;outline:none;letter-spacing:.05em"
+            onkeydown="if(event.key==='Enter') setStorageUrl('distillat', this.value)">
+          <button onclick="setStorageUrl('distillat', document.getElementById('storage-url-distillat').value)"
+            style="background:none;border:1px solid #4fc3f7;color:#4fc3f7;padding:8px 16px;font-family:inherit;font-size:9px;cursor:pointer;letter-spacing:.1em;margin-left:6px">
+            LOAD ↗
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- LNG — placeholder -->
+    <div id="storage-pane-lng" class="storage-pane" style="position:absolute;inset:0;display:none;">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:var(--dim)">
+        <div style="font-size:48px;opacity:.2">🧊</div>
+        <div style="font-size:12px;letter-spacing:.2em;color:#22d3ee">LNG STORAGE</div>
+        <div style="font-size:10px;opacity:.5">PowerBI report not yet configured</div>
+        <div style="margin-top:8px">
+          <input id="storage-url-lng" type="text" placeholder="Paste PowerBI URL here…"
+            style="background:var(--panel);border:1px solid var(--border);color:var(--text);padding:8px 14px;font-family:inherit;font-size:10px;width:420px;outline:none;letter-spacing:.05em"
+            onkeydown="if(event.key==='Enter') setStorageUrl('lng', this.value)">
+          <button onclick="setStorageUrl('lng', document.getElementById('storage-url-lng').value)"
+            style="background:none;border:1px solid #22d3ee;color:#22d3ee;padding:8px 16px;font-family:inherit;font-size:9px;cursor:pointer;letter-spacing:.1em;margin-left:6px">
+            LOAD ↗
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- GASOLINE — placeholder -->
+    <div id="storage-pane-gasoline" class="storage-pane" style="position:absolute;inset:0;display:none;">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:var(--dim)">
+        <div style="font-size:48px;opacity:.2">⛽</div>
+        <div style="font-size:12px;letter-spacing:.2em;color:#fb923c">GASOLINE STORAGE</div>
+        <div style="font-size:10px;opacity:.5">PowerBI report not yet configured</div>
+        <div style="margin-top:8px">
+          <input id="storage-url-gasoline" type="text" placeholder="Paste PowerBI URL here…"
+            style="background:var(--panel);border:1px solid var(--border);color:var(--text);padding:8px 14px;font-family:inherit;font-size:10px;width:420px;outline:none;letter-spacing:.05em"
+            onkeydown="if(event.key==='Enter') setStorageUrl('gasoline', this.value)">
+          <button onclick="setStorageUrl('gasoline', document.getElementById('storage-url-gasoline').value)"
+            style="background:none;border:1px solid #fb923c;color:#fb923c;padding:8px 16px;font-family:inherit;font-size:9px;cursor:pointer;letter-spacing:.1em;margin-left:6px">
+            LOAD ↗
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- FUEL OIL — placeholder -->
+    <div id="storage-pane-fuel" class="storage-pane" style="position:absolute;inset:0;display:none;">
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;gap:16px;color:var(--dim)">
+        <div style="font-size:48px;opacity:.2">🚢</div>
+        <div style="font-size:12px;letter-spacing:.2em;color:#94a3b8">FUEL OIL STORAGE</div>
+        <div style="font-size:10px;opacity:.5">PowerBI report not yet configured</div>
+        <div style="margin-top:8px">
+          <input id="storage-url-fuel" type="text" placeholder="Paste PowerBI URL here…"
+            style="background:var(--panel);border:1px solid var(--border);color:var(--text);padding:8px 14px;font-family:inherit;font-size:10px;width:420px;outline:none;letter-spacing:.05em"
+            onkeydown="if(event.key==='Enter') setStorageUrl('fuel', this.value)">
+          <button onclick="setStorageUrl('fuel', document.getElementById('storage-url-fuel').value)"
+            style="background:none;border:1px solid #94a3b8;color:#94a3b8;padding:8px 16px;font-family:inherit;font-size:9px;cursor:pointer;letter-spacing:.1em;margin-left:6px">
+            LOAD ↗
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+if('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js', {scope: './'})
+      .then(r => console.log('[SW] Registered:', r.scope))
+      .catch(e => console.warn('[SW] Failed:', e));
+  });
+}
+</script>
 </body>
 </html>
