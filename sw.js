@@ -1,47 +1,36 @@
 /* ═══════════════════════════════════════════════════════════════
-   THE LINK — Service Worker
-   Caches the app shell for offline/fast load
+   THE LINK — Service Worker (GitHub Pages compatible)
 ═══════════════════════════════════════════════════════════════ */
-const CACHE_NAME = 'thelink-v1';
+const CACHE_NAME = 'thelink-v2';
 const SHELL = [
-  '/',
-  '/index.html',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/manifest.json',
+  './index.html',
+  './manifest.json',
+  './icon-192.png',
+  './icon-512.png',
 ];
 
-// Install: cache app shell
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE_NAME).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME)
+      .then(c => c.addAll(SHELL))
+      .then(() => self.skipWaiting())
   );
 });
 
-// Activate: clean old caches
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-// Fetch: cache-first for shell, network-first for APIs
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // Always go network for API calls (RSS, EIA, PowerBI, TradingView)
-  const isApi = url.hostname !== self.location.hostname ||
-    url.pathname.includes('/api/') ||
-    url.hostname.includes('tradingview') ||
-    url.hostname.includes('rss2json') ||
-    url.hostname.includes('allorigins') ||
-    url.hostname.includes('eia.gov') ||
-    url.hostname.includes('powerbi') ||
-    url.hostname.includes('anthropic');
-
-  if (isApi) {
+  // Always network for external APIs
+  const isExternal = url.hostname !== self.location.hostname;
+  if (isExternal) {
     e.respondWith(fetch(e.request).catch(() => new Response('', {status: 503})));
     return;
   }
@@ -52,8 +41,7 @@ self.addEventListener('fetch', e => {
       if (cached) return cached;
       return fetch(e.request).then(resp => {
         if (resp.ok) {
-          const clone = resp.clone();
-          caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+          caches.open(CACHE_NAME).then(c => c.put(e.request, resp.clone()));
         }
         return resp;
       });
